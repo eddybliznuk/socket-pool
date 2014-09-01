@@ -1,0 +1,143 @@
+ABOUT SPOOL
+-----------
+
+SPOOL (Socket Pool) is a Linux Kernel module that help user space applications to efficiently serve multiple connections
+on stream sockets (TCP or other). It offers asynchronous bulk read/write socket interface that alters the traditional 
+approach based on select/poll/epoll calls combined with reads and writes on single sockets.
+
+Unlike standard sockets Spool sockets are not associated with file memory structures. This approach saves Kernel 
+memory and improves performance by avoiding file descriptor lookup in every socket call from the user space.
+
+For example, in WEB server that is built using SPOOL a single ioctl() call can perform accept for many connections 
+and return a list of new sockets of user defined size. For read and write operation  we don't need to poll all 
+file descriptors and call for read or write function on every single socket. We can perform read and write 
+operation on a list of sockets using a single system call. The size of such list is also user defined and can vary 
+depending on desired maximum connection latency. The module enables user to close sockets manually but all open sockets
+also are closed automatically on module unload. 
+
+Tests of simple HTTP server implemented using standard sockets and SPOOl showed that SPOOL provides performance 
+gain of 20-30% depending on the number of simultaneously used sockets. 
+
+See more details below in USING SPOOL chapter.
+
+ 
+BUILDING SPOOL
+--------------
+
+The build process is quite standard. In 'spool' directory just run:
+
+./make
+
+For compiling with debug printing use CFLAGS environment variable with the following value: 
+CFLAGS=_SPOOL_DEBUG
+	
+Make process assumes that Kernel module development package is installed in the standard location:
+/lib/modules/<linux-version> 	
+
+
+
+LOADING AND UNLOADING SPOOL
+---------------------------
+
+To load the Spool module run in the 'spool' directory:
+
+insmod ./spool.ko
+
+The Spool module is associated with /dev/spool device file.
+
+To unload the Spool module:
+
+rmmod spool
+
+
+
+USING SPOOL
+-----------
+Below you can find a short synopsis of how the Spool module is used from 
+a user space TCP server application. Error processing is not included. 
+Polling spool file provides indication that there are sockets to be accepted. 
+
+/* Open Spool instance */
+
+spool_fd = open("/dev/spool", O_RDWR);
+
+/* Create a listening socket and start listening on it */
+
+struct spool_sock	lis_sock;
+
+lis_sock.flags 		= SPOLL_FLAG_LISTENING_SOCK;
+lis_sock.backlog 	= 1000;
+ioctl(spool_fd, SPOOL_IO_ADDSOCK, lis_sock);
+
+/* Accept new connections and perform reads and writes in a loop */
+
+struct epoll_event 	event;
+struct spool_accept accept;
+
+epoll_fd = epoll_create1(0);
+
+event.data.fd	= spool_fd;
+event.events	= EPOLLIN;
+epoll_ctl(epoll_fd, EPOLL_CTL_ADD, spool_fd, &event);
+
+accept.sock_list	= (struct spool_sock*)malloc(sizeof(struct spool_sock)*MAX_ACCEPTED_SOCKS);
+accept.size			= MAX_ACCEPTED_SOCKS;
+		
+while(!stop_loop)
+{
+		int n = epoll_wait(epoll_fd, &event, 1, 100);
+
+		if(n<1)
+			continue;
+
+		ioctl(spool_fd, SPOOL_IO_ACCEPT, &accept);
+		
+		for(i=0; i<accept.size; i++)
+		{
+			// Process socket associated with new connections that 
+			// arrived in accept.sock_list 
+		}
+		
+		...
+		
+		// rbd_head points to a pre-initialized list of spool_sbd structures 
+		// associated with sockets from which data are supposed to be received
+		
+		read(spool_fd, rbd_head, 0);
+		cur_rbd = rbd_head;
+
+		while (cur_rbd != NULL)
+		{
+			// Process sockets that received data
+			....
+			cur_rbd = cur_rbd->next;
+		}
+
+		// wbd_head points to a pre-initialized list of spool_sbd structures 
+		// associated with sockets from which data are supposed to be sent
+
+		write(spool_fd, wbd_head, 0);
+		cur_wbd = wbd_head;
+
+		while (cur_wbd != NULL)
+		{
+			// Process sockets that sent data
+			....
+			cur_wbd = cur_wbd->next;
+		}
+		
+		...
+}
+
+/* Close Spool instance */
+close(spool_fd);
+
+
+For a real life example of spool usage please refer to Spate project version 2.x.x:
+https://code.google.com/p/spate-tool/
+
+
+
+
+Yours, 
+Edward Blizniuk (Ed Blake)
