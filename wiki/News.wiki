@@ -1,0 +1,3 @@
+=SPOOL News=
+
+*September, 1st, 2014* - the initial version of SPOOL is uploaded. Additional documantation and performance tests results are coming soon.
