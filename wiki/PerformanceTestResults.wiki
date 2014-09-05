@@ -43,6 +43,7 @@ Spate server functions opposite to the Spate client. It listens on a port and ac
 ||100||43629||48520||49193||N/A||13||
 
 
+[http://www.ljplus.ru/img4/a/p/apelsinov/SPOOL-Performance-Test.png]
 
 ==Resume==
 
