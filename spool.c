@@ -23,8 +23,8 @@
 #include <net/sock.h>
 #include <linux/syscalls.h>
 
-#define _SPOOL_DEBUG
 #define _SPOOL_KERNEL
+
 #include "spool.h"
 
 MODULE_AUTHOR("Edward Blizniuk");
@@ -56,7 +56,30 @@ struct spool_instance
 
 	int							sock_flags;
 	int 						sock_proto;
+
+#ifdef _SPOOL_PROC_STAT
+	struct spool_instance*		next;
+	/* Statistics for /proc/spool-stat file */
+	int							listeners;
+	int							accepted;
+	int							connected;
+	int							closed;
+	long						read;
+	long						write;
+#endif
 };
+
+#ifdef _SPOOL_PROC_STAT
+
+struct spool_universe
+{
+	struct spool_instance* inst_list;
+	struct semaphore sem;
+};
+
+static struct spool_universe universe;
+
+#endif
 
 static unsigned int hash(long val)
 {
@@ -191,7 +214,7 @@ static int spool_bind_sock(struct socket* sock, struct sockaddr_in* local)
 	return kernel_bind(sock, (struct sockaddr*)(local), sizeof(struct sockaddr_in));
 }
 
-static int spool_connect (struct socket* sock, struct sockaddr_in* remote)
+static int spool_connect (struct spool_instance* si, struct socket* sock, struct sockaddr_in* remote)
 {
 	int res;
 
@@ -206,6 +229,10 @@ static int spool_connect (struct socket* sock, struct sockaddr_in* remote)
 
 	if (res == 0 || res == -EINPROGRESS)
 		return (0);
+
+#ifdef _SPOOL_PROC_STAT
+	++si->connected;
+#endif
 
 	return res;
 }
@@ -236,6 +263,10 @@ static int spool_listen(struct spool_instance* si, struct socket* sock, int back
 	sle->sock = sock;
 	sle->next = si->lis_socks;
 	si->lis_socks = sle;
+
+#ifdef _SPOOL_PROC_STAT
+	++ si->listeners;
+#endif
 
 	return (0);
 }
@@ -277,6 +308,9 @@ static int spool_accept(struct spool_instance* si, struct spool_sock* sock_list,
 			++sock_list;
 			++accepted;
 
+#ifdef _SPOOL_PROC_STAT
+			++si->accepted;
+#endif
 			if(++i == array_size)
 				/* Array of accepted sockets is full */
 				break;
@@ -338,6 +372,10 @@ static void spool_close(struct spool_instance* si, struct socket* sock)
 
 	if(sock->file == NULL)
 		sock_release(sock);
+
+#ifdef _SPOOL_PROC_STAT
+	++si->closed;
+#endif
 }
 
 
@@ -402,7 +440,7 @@ static long spool_ioctl(struct file *filp, u_int cmd, u_long data)
 		}
 		else if(k_spool_sock.flags & SPOOL_FLAG_CLIENT_SOCK)
 		{
-			res = spool_connect(sock, &k_spool_sock.remote);
+			res = spool_connect(si, sock, &k_spool_sock.remote);
 			if (res < 0)
 			{
 				spool_close(si, sock);
@@ -490,8 +528,6 @@ static ssize_t spool_read(struct file *filp, char __user *buff,  size_t count, l
 		struct socket*	sock;
 		int				mask = 0;
 
-		//printk(KERN_ERR "SPOOL: 111111111111\n");
-
 		if (copy_from_user(&si->k_sbd, (void __user *)u_sbd, sizeof(struct spool_sbd)))
 		{
 			printk(KERN_ERR "SPOOL: Failed to copy sbd to Kernel from user space at spool_read()\n");
@@ -501,28 +537,25 @@ static ssize_t spool_read(struct file *filp, char __user *buff,  size_t count, l
 		if(si->k_sbd.status == SPOOL_STAT_DISABLED || si->k_sbd.sock_h == 0)
 			goto next_r;
 
-		//printk(KERN_ERR "SPOOL: 22222222222\n");
-
 		sock = (struct socket*)si->k_sbd.sock_h;
 		mask = sock->ops->poll(sock->file, sock, NULL);
 
 		if(!(mask & (POLLIN | POLLRDNORM)))
 			goto next_r;
 
-		//printk(KERN_ERR "SPOOL: 3333\n");
-
 		si->iov.iov_base = si->k_sbd.buff + si->k_sbd.offset;
 		si->iov.iov_len = si->k_sbd.size - si->k_sbd.offset;
 
 		res = sock_recvmsg(sock, &si->msg, si->iov.iov_len, si->msg.msg_flags);
-
-		//printk(KERN_ERR "SPOOL: 4444444444\n");
 
 		if (res > 0)
 		{
 			++socks_served;
 			si->k_sbd.offset += res;
 			si->k_sbd.status = SPOOL_STAT_OK;
+#ifdef _SPOOL_PROC_STAT
+			si->read += res;
+#endif
 		}
 		else if(res == 0)
 			si->k_sbd.status = SPOOL_STAT_CONN_CLOSED;
@@ -532,8 +565,6 @@ static ssize_t spool_read(struct file *filp, char __user *buff,  size_t count, l
 		}
 		else
 			si->k_sbd.status = SPOOL_STAT_READ_ERROR;
-
-		//printk(KERN_ERR "SPOOL: 5555\n");
 
 		if (copy_to_user((void __user *)u_sbd, &si->k_sbd, sizeof(struct spool_sbd)))
 		{
@@ -585,6 +616,10 @@ static ssize_t spool_write(struct file *filp, const char __user *buff,  size_t c
 			++socks_served;
 			si->k_sbd.offset += res;
 			si->k_sbd.status = SPOOL_STAT_OK;
+#ifdef _SPOOL_PROC_STAT
+			si->write += res;
+#endif
+
 		}
 		else if (res == -EAGAIN)
 			si->k_sbd.status = SPOOL_STAT_NOT_READY;
@@ -638,6 +673,18 @@ static int spool_open(struct inode *inode, struct file *filp)
 
 	filp->private_data = si;
 
+#ifdef _SPOOL_PROC_STAT
+	/* Add to the global instance list. This list is used for /proc statistics */
+
+    if (down_interruptible(&universe.sem))
+    	return -ERESTARTSYS;
+
+    si->next = universe.inst_list;
+    universe.inst_list = si;
+
+    up(&universe.sem);
+#endif
+
 #ifdef _SPOOL_DEBUG
     printk(KERN_INFO "SPOOL: Instance open.\n");
 #endif
@@ -648,6 +695,29 @@ static int spool_open(struct inode *inode, struct file *filp)
 static int spool_release(struct inode *inode, struct file *filp)
 {
 	(void)inode;	/* UNUSED */
+
+#ifdef _SPOOL_PROC_STAT
+	/* Remove from the global instance list. This list is used for /proc statistics */
+
+    if (down_interruptible(&universe.sem))
+    	return -ERESTARTSYS;
+
+    {
+		struct spool_instance** cur = &universe.inst_list;
+
+		while(*cur)
+		{
+			if((*cur) == filp->private_data)
+			{
+				*cur = (*cur)->next;
+				break;
+			}
+			cur  = &((*cur)->next);
+		}
+    }
+
+    up(&universe.sem);
+#endif
 
 	if (filp->private_data != NULL)
 		spool_release_resources (filp->private_data);
@@ -696,6 +766,37 @@ static struct miscdevice spool_dev = {
     &spool_fops
 };
 
+#ifdef _SPOOL_PROC_STAT
+int spool_stat_read_procmem(char *buf, char **start, off_t offset,
+                   int count, int *eof, void *data)
+{
+	struct spool_instance** cur;
+	int i = 0, len = 0;
+    int limit = count - 80;
+
+    if (down_interruptible(&universe.sem))
+    	return -ERESTARTSYS;
+
+	cur = &universe.inst_list;
+
+	while(*cur && len <= limit)
+	{
+		struct spool_instance* si = *cur;
+
+		len += sprintf(buf+len,"Device %i: list %i, accept %i, conn %i, clos %i, read %li, write %li\n",
+					   i, si->listeners, si->accepted, si->connected, si->closed, si->read, si->write);
+
+		cur  = &((*cur)->next);
+		++i;
+	}
+
+    up(&universe.sem);
+
+    *eof = 1;
+    return len;
+}
+#endif
+
 static int spool_init(void)
 {
      int res;
@@ -707,6 +808,17 @@ static int spool_init(void)
          return res;
      }
 
+#ifdef _SPOOL_PROC_STAT
+     create_proc_read_entry("spool-stat",
+                            0    /* default mode */,
+                            NULL /* parent dir */,
+                            spool_stat_read_procmem,
+                            NULL /* client data */);
+
+     universe.inst_list = NULL;
+     init_MUTEX(&universe.sem);
+#endif
+
      printk(KERN_INFO "SPOOL: Module is loaded.\n");
 
      return (0);
@@ -714,6 +826,10 @@ static int spool_init(void)
 
 static void spool_exit(void)
 {
+#ifdef _SPOOL_PROC_STAT
+	remove_proc_entry("spool-stat", NULL);
+#endif
+
     misc_deregister(&spool_dev);
     printk(KERN_INFO "SPOOL: Module is unloaded.\n");
 }
