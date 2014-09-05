@@ -23,6 +23,7 @@
 #include <net/sock.h>
 #include <linux/syscalls.h>
 
+#define _SPOOL_DEBUG
 #define _SPOOL_KERNEL
 #include "spool.h"
 
@@ -137,10 +138,7 @@ static void spool_release_resources(void* priv)
 				 * The sockets with file descriptors will be closed automatically on instance release
 				 * (like all other file descriptors) */
 				if(sle->sock && sle->sock->file == NULL)
-				{
-					printk(KERN_INFO "SPOOL: RELEASE");
 					sock_release(sle->sock);
-				}
 
 				kfree (sle);
 
@@ -205,8 +203,6 @@ static int spool_connect (struct socket* sock, struct sockaddr_in* remote)
 #endif
 
 	res = kernel_connect (sock, (struct sockaddr *)remote, sizeof(struct sockaddr_in), SPOOL_SOCK_FLAGS);
-
-	printk(KERN_INFO "SPOOL: AAAAAA connect socket [%lx] file [%lx]\n", (long)sock, (long)sock->file);
 
 	if (res == 0 || res == -EINPROGRESS)
 		return (0);
@@ -494,6 +490,8 @@ static ssize_t spool_read(struct file *filp, char __user *buff,  size_t count, l
 		struct socket*	sock;
 		int				mask = 0;
 
+		//printk(KERN_ERR "SPOOL: 111111111111\n");
+
 		if (copy_from_user(&si->k_sbd, (void __user *)u_sbd, sizeof(struct spool_sbd)))
 		{
 			printk(KERN_ERR "SPOOL: Failed to copy sbd to Kernel from user space at spool_read()\n");
@@ -503,16 +501,22 @@ static ssize_t spool_read(struct file *filp, char __user *buff,  size_t count, l
 		if(si->k_sbd.status == SPOOL_STAT_DISABLED || si->k_sbd.sock_h == 0)
 			goto next_r;
 
+		//printk(KERN_ERR "SPOOL: 22222222222\n");
+
 		sock = (struct socket*)si->k_sbd.sock_h;
 		mask = sock->ops->poll(sock->file, sock, NULL);
 
 		if(!(mask & (POLLIN | POLLRDNORM)))
 			goto next_r;
 
+		//printk(KERN_ERR "SPOOL: 3333\n");
+
 		si->iov.iov_base = si->k_sbd.buff + si->k_sbd.offset;
 		si->iov.iov_len = si->k_sbd.size - si->k_sbd.offset;
 
 		res = sock_recvmsg(sock, &si->msg, si->iov.iov_len, si->msg.msg_flags);
+
+		//printk(KERN_ERR "SPOOL: 4444444444\n");
 
 		if (res > 0)
 		{
@@ -528,6 +532,8 @@ static ssize_t spool_read(struct file *filp, char __user *buff,  size_t count, l
 		}
 		else
 			si->k_sbd.status = SPOOL_STAT_READ_ERROR;
+
+		//printk(KERN_ERR "SPOOL: 5555\n");
 
 		if (copy_to_user((void __user *)u_sbd, &si->k_sbd, sizeof(struct spool_sbd)))
 		{
@@ -655,8 +661,8 @@ static int spool_release(struct inode *inode, struct file *filp)
 
 static unsigned int spool_poll(struct file *filp, poll_table *wait)
 {
-	struct spool_instance*	si = filp->private_data;
-	struct sock_list_entry*	sle = si->lis_socks;
+    struct spool_instance*	si = filp->private_data;
+    struct sock_list_entry*	sle = si->lis_socks;
     unsigned int 			summary_mask = 0;
 
     while (sle != NULL)
@@ -685,14 +691,14 @@ struct file_operations spool_fops = {
 
 static struct miscdevice spool_dev = {
 
-        MISC_DYNAMIC_MINOR,
-        "spool",
-        &spool_fops
+    MISC_DYNAMIC_MINOR,
+    "spool",
+    &spool_fops
 };
 
 static int spool_init(void)
 {
-	 int res;
+     int res;
 
      res = misc_register(&spool_dev);
      if (res < 0)
@@ -701,20 +707,15 @@ static int spool_init(void)
          return res;
      }
 
-#ifdef _SPOOL_DEBUG
      printk(KERN_INFO "SPOOL: Module is loaded.\n");
-#endif
 
      return (0);
 }
 
 static void spool_exit(void)
 {
-	misc_deregister(&spool_dev);
-
-#ifdef _SPOOL_DEBUG
+    misc_deregister(&spool_dev);
     printk(KERN_INFO "SPOOL: Module is unloaded.\n");
-#endif
 }
 
 module_init(spool_init);
