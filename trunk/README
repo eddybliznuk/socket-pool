@@ -1,12 +1,9 @@
 ABOUT SPOOL
 -----------
 
-SPOOL (Socket Pool) is a Linux Kernel module that help user space applications to efficiently serve multiple connections
-on stream sockets (TCP or other). It offers asynchronous bulk read/write socket interface that alters the traditional 
+SPOOL (Socket Pool) is a Linux Kernel module that helps user space applications to efficiently serve multiple connections
+on stream sockets (TCP or other). It implements asynchronous bulk read/write socket interface that alters the traditional 
 approach based on select/poll/epoll calls combined with reads and writes on single sockets.
-
-Unlike standard sockets Spool sockets are not associated with file memory structures. This approach saves Kernel 
-memory and improves performance by avoiding file descriptor lookup in every socket call from the user space.
 
 For example, in WEB server that is built using SPOOL a single ioctl() call can perform accept for many connections 
 and return a list of new sockets of user defined size. For read and write operation  we don't need to poll all 
@@ -16,7 +13,7 @@ depending on desired maximum connection latency. The module enables user to clos
 also are closed automatically on module unload. 
 
 Tests of simple HTTP server implemented using standard sockets and SPOOl showed that SPOOL provides performance 
-gain of 20-30% depending on the number of simultaneously used sockets. 
+gain up to 26% depending on the number of simultaneously used sockets. 
 
 See more details below in USING SPOOL chapter.
 
@@ -30,10 +27,14 @@ The build process is quite standard. In 'spool' directory just run:
 
 For compiling with debug printing use CFLAGS environment variable with the following value: 
 CFLAGS=_SPOOL_DEBUG
+
+For compiling with /proc support use CFLAGS environment variable with the following value: 
+CFLAGS=_SPOOL_PROC_STAT
+
+When _SPOOL_PROC_STAT symbol is defined SPOLL collects basic socket statistics and shows it in /proc/spool-stat file.
 	
 Make process assumes that Kernel module development package is installed in the standard location:
 /lib/modules/<linux-version> 	
-
 
 
 LOADING AND UNLOADING SPOOL
