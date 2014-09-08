@@ -47,7 +47,7 @@ Spate server functions opposite to the Spate client. It listens on a port and ac
 
 ==Resume==
 
-Even though the results are not as dramatic as I expected we can resume that usage of SPOOL provides stable performance increase up to 27% when the number of open sockets is not too high. 
+Even though the results are not as dramatic as I expected we can resume that usage of SPOOL provides stable performance increase up to 26% when the number of open sockets is not too high. 
 
 The test was done with very row first version of SPOOL. We can consider fine-tuning SPOOL itself and functions that use it in order to gain more performance.  However we have to take into consideration that the biggest part of CPU power is spent on TCP stack functions. SPOOL just improves interface but it can't influence TCP stack performance. 
 
