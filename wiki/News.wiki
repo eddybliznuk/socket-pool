@@ -5,3 +5,5 @@
 *September, 4th, 2014* - performance test result published on Wiki page: PerformanceTestResults
 
 *September, 5th, 2014* - basic statistics with /proc interface added
+
+*September, 8th, 2014* - integration with Spate project (https://code.google.com/p/spate-tool/) finished 
